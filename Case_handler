@@ -1,0 +1,567 @@
+public class Case_Handler extends Base_Handler 
+{
+    private Set<Id> serviceActivationCaseIds = new Set<Id>();
+    private Set<Id> parentCaseIds = new Set<Id>(); 
+    private Set<Id> completedSubCasesRecordTypes = new Set<Id>();
+    private Set<Id> caseOpportunityIds = new Set<Id>();
+    private Set<Id> caseAccountIds = new Set<Id>();
+    private List<Task> serviceActivationCaseTasks;
+    private List<Task> allIncompleteOppTasks = new List<Task>();
+    private List<Opportunity> caseOpportunities;
+    private List<Case> parentCases;
+    private List<Case> oldCases = trigger.old;
+    private List<Case> newCases = trigger.new;
+    private List<Case> childCases =  new List<Case>();
+    private List<Case> casesToShareWithPartner = new List<Case>();
+    private List<Case> casesToRevokePartnerAccess = new List<Case>();
+    private List<Case> casesToBeInserted = new List<Case>();
+    private List<Account> caseAccounts = new List<Account>();
+    private List<Case_costs__c> newCaseCostList = new List<Case_costs__c>();
+    private List<Case_costs__c> newSecondCaseCostList = new List<Case_costs__c>();
+    private Set<Id> allClosedCaseOpportunities = new Set<Id>();
+    private List<Case> closedJSONCases = new List<Case>();
+    private Map<Id, Case> allCaseRecordTypes = new Map<Id, Case>();
+    private Id implementationCaseRecordType;
+    private Id workOrderCaseRecordType;
+    private Id jobCardCaseRecordType;
+    
+    private static final String ERROR_COMPLETE_DATA_CENTRE  = 'Please make sure Data Center and Service provider fields are filled before closing the Case';
+    private static final String ERROR_COMPLETE_SUB_CASES = 'All Cases must be completed before closing Parent Implementation Case';
+    private static final String ERROR_SERVICE_ACTIVATION = 'Please complete all tasks before closing Service Activation case';
+    public static final String SUBJ_ADD_DATA_CENTER  = ' - Add Data Center and Service Provider';
+    public static final String SUBJ_APPROVE_IR = ' - Approve the IR';
+    public static final String SUBJ_ASSIGN_CCA = ' - Add Service Delivery/Customer Care Administrators';
+    public static final String SUBJ_ASSIGN_CCM = ' - Add Client Services/Customer Care Consultant';
+    public static final String SUBJ_CREATE_ACCOUNTS = ' - Approve and create accounts';
+    public static final String SUBJ_CREATE_CONFIG_GROUP = ' - Create Config Groups';
+    public static final String SUBJ_CREATE_CONFIG_ON_FM = ' - Create the Configs On FM';
+    public static final String SUBJ_CREATE_IR_OBJ =  ' - Create IR object';
+    public static final String SUBJ_CREATE_WORKS_ORDER = ' - Works Order Creation';
+    public static final String SUBJ_EXTRA_APPROVAL = ' - Extra Approval For Maintenance';
+    public static final String SUBJ_PARENT_IMPLEMENTATION = ' - Parent Implementation Case';
+    public static final String SUBJ_PICK_STOCK = ' - Pick Stock';
+    public static final String SUBJ_PROJECT_OFFICE = ' - Project Office';
+    public static final String SUBJ_SERVICE_ACTIVATION = ' - Enable Service Activation Case';
+    public static final String SUBJ_SERVICE_DELIVERY = ' - Service Delivery';
+    public static final String SUBJ_SAGE_FLEET_ACTIV = ' - Create Sage and FleetActiv Accounts';
+
+    public override void bulkBefore()
+    {
+        super.bulkBefore();
+        
+        if(trigger.isUpdate)
+        {
+            //Before the child case can be closed all the sub-tasks must be closed off.
+            Set<Id> newCaseIds = Trigger.isUpdate ? Trigger.newMap.keySet() : null;            
+            allCaseRecordTypes.putAll(DAL_Case.getCaseRecordTypes(newCaseIds)); 
+            for(Case newCase: newCases)
+            {
+                Case oldCase = (Case)trigger.oldMap.get(newCase.Id);
+                               
+                if (oldCase != null && newCase != null)
+                    if(newCase.Status.equals(DAL_Case.STATUS_CLOSED) || newCase.Status.equals(DAL_Case.STATUS_COMPLETED))
+                    { 
+                        if(newCase.Subject != null && newCase.Subject.containsIgnoreCase(SUBJ_SERVICE_ACTIVATION)  && newCase.Status != oldCase.Status)
+                            serviceActivationCaseIds.add(newCase.Id);
+                        
+                        caseAccountIds.add(newCase.AccountId);
+                    }
+                     
+                if (newCase.Status != oldCase.Status)
+                {
+                    parentCaseIds.add(newCase.ParentId);
+                    caseOpportunityIds.add(newCase.OpportunityId__c);
+                    completedSubCasesRecordTypes.add(newCase.RecordTypeId);
+                }
+                /*
+                if( (oldCase.Will_the_Customer_be_paying_for_the_miss__c != newCase.Will_the_Customer_be_paying_for_the_miss__c) && (newCase.Will_the_Customer_be_paying_for_the_miss__c != null )){
+                    casesToBeInserted.add(newCase);
+                }               
+                */
+                if (DAL_Share.mustRevokePartnerShares(oldCase, newCase))
+                    casesToRevokePartnerAccess.add(oldCase);
+                else if (DAL_Share.mustShareWithPartner(oldCase, newCase))
+                    casesToShareWithPartner.add(newCase);
+            }
+            
+            if (!caseAccountIds.isEmpty())
+                caseAccounts = DAL_Account.getAccount(caseAccountIds);
+            
+            
+            //Before the child case can be closed all the sub-tasks must be closed off.
+            if(!serviceActivationCaseIds.isEmpty())
+                serviceActivationCaseTasks = DAL_Task.getIncompleteTasks(serviceActivationCaseIds);
+            
+            /*
+            if(casesToBeInserted.size() > 0){
+                createNewWOCases();                
+            }
+            */
+            
+            parentCaseIds = SysUtils.trimSet(parentCaseIds);
+            if (!parentCaseIds.isEmpty())
+            {
+                childCases = DAL_Case.getChildrenCases(parentCaseIds);
+                parentCases = DAL_Case.getParentCase(parentCaseIds);
+                implementationCaseRecordType = RecordCreator.GetRecordTypeByDeveloperName(DAL_Case.RT_IMPLEMENTATION);
+            }
+            
+            if (!caseOpportunityIds.isEmpty())
+                caseOpportunities = DAL_Opportunity.getOpportunityRelatedToCase(caseOpportunityIds);
+            
+        }
+        
+        if(trigger.isInsert)
+        {
+            for(Case newCase: newCases)
+            {
+                parentCaseIds.add(newCase.ParentId);
+                if (DAL_Share.mustShareWithPartner(null, newCase))
+                    casesToShareWithPartner.add(newCase);
+            }
+            
+            parentCaseIds = SysUtils.trimSet(parentCaseIds);
+            if (!parentCaseIds.isEmpty())
+            {
+                childCases = DAL_Case.getChildrenCases(parentCaseIds);
+                parentCases = DAL_Case.getParentCase(parentCaseIds);
+            }
+
+        }
+        
+        if(trigger.isDelete)
+        {
+            for(Case oldCase: oldCases)
+                parentCaseIds.add(oldCase.ParentId);
+            
+            parentCaseIds = SysUtils.trimSet(parentCaseIds);
+            if (!parentCaseIds.isEmpty())
+            {
+                childCases = DAL_Case.getChildrenCases(parentCaseIds);
+                parentCases = DAL_Case.getParentCase(parentCaseIds);
+            }
+        }
+    }
+        
+    public override void beforeInsert(SObject so)
+    {
+        super.beforeInsert(so);
+        
+        Case newCase = (Case)so;
+        
+        if(newCase.Will_the_Customer_be_paying_for_the_miss__c != DAL_Case.PICKLIST_YES){
+            changeTheStatusBarBeforeInsert(newCase);
+            changeStageWhenChildCaseIsCreated(newCase);
+        }
+    }
+    public override void beforeUpdate(SObject oldSo, SObject so)
+    {
+        super.beforeUpdate(oldSo, so);
+        
+        Case oldCase = (Case)oldSo;
+        Case newCase = (Case)so;
+        
+        CheckIfNotExistsOpenTasks(newCase);
+        changeTheStatusBarBeforeUpdate(oldCase, newCase);
+        caseCompletedCheckTheCheckBox(oldCase, newCase);
+        updateTheSupportProcessField(oldCase, newCase);
+        checkIfAccountCheckboxesTrueBeforeClosingCase(oldCase, newCase);
+        checkIfAllCasesAreCompletedBeforeClosingParentImplementationCase(oldCase, newCase);
+        changeShareWithPartnerOnOwnerChange(oldCase, newCase);
+    }
+    
+    public override void beforeDelete(SObject so)
+    {
+        super.beforeDelete(so);
+        updateChildCaseSum((Case)so);
+    }
+    
+
+    public override void andFinally()
+    {
+        super.andFinally();    
+        
+        if (!closedJSONCases.isEmpty())
+            new parseJSONProcessingInstructions(closedJSONCases).parseJSON();
+
+        if (!casesToRevokePartnerAccess.isEmpty())
+        {
+            Set<Id> casePartnerAccountIds = new Set<Id>();
+            Set<Id> caseIds = new Set<Id>();
+            Set<Id> caseAccountIds = new Set<Id>();
+            
+            for (Case newCase : casesToRevokePartnerAccess)
+            {
+                Case oldCase = (Case)trigger.oldMap.get(newCase.Id);
+                
+                if (oldCase != null)
+                {
+                    casePartnerAccountIds.add(oldCase.Fitment_Center__c);
+                    caseIds.add(oldCase.Id);
+                    caseAccountIds.add(oldCase.AccountId);
+                }
+
+                casePartnerAccountIds.add(newCase.Fitment_Center__c);
+                caseIds.add(newCase.Id);
+                caseAccountIds.add(newCase.AccountId);
+
+            }
+            DAL_Share.deleteCaseShares(casePartnerAccountIds, caseIds, caseAccountIds);
+        }
+        
+        DAL_Share.createCaseShares(casesToShareWithPartner);
+        
+    }
+
+    private void CheckIfNotExistsOpenTasks(Case newCase)
+    {
+        if (!serviceActivationCaseIds.isEmpty())
+            //Before the child case can be closed all the sub-tasks must be closed off. 
+            for (Task task : serviceActivationCaseTasks)
+                if(task.WhatId == newCase.Id)
+                {
+                    newCase.addError(ERROR_SERVICE_ACTIVATION);
+                    return;
+                }
+    }
+    
+    private void changeShareWithPartnerOnOwnerChange(Case oldCase, Case newCase)
+    {   
+        String caseRecordType = allCaseRecordTypes.get(newCase.Id).RecordType.DeveloperName; 
+        if((caseRecordType.equals(DAL_Case.RT_AF_FL_WORKS_ORDER) || caseRecordType.equals(DAL_Case.RT_JOB_CARD_CASE) ) && (oldCase.Status != newCase.Status && newCase.Share_with_Partner__c) && (newCase.Status == DAL_Case.STATUS_CLOSED || newCase.Status == DAL_Case.STATUS_COMPLETED) ){
+            newCase.Share_with_Partner__c = false;
+        }
+        
+        if((!(caseRecordType.equals(DAL_Case.RT_AF_FL_WORKS_ORDER)) && !(caseRecordType.equals(DAL_Case.RT_JOB_CARD_CASE))) && (oldCase.OwnerId != newCase.OwnerId) && newCase.Share_with_Partner__c){
+            newCase.Share_with_Partner__c = false;
+        }
+    }
+    
+    // This method checks if subcase has been closed or completed and if so, it updates the parent case's progress bar
+    private void changeTheStatusBarBeforeUpdate(Case oldCase, Case newCase)
+    {
+        Integer completedCases = 0;
+        Integer totalCases = childCases.size();
+        
+        if (newCase.Status.Equals(DAL_Case.STATUS_CLOSED) || newCase.Status.Equals(DAL_Case.STATUS_COMPLETED))
+            completedCases = 1;
+        
+        if (!childCases.isEmpty() && newCase.Status != oldCase.Status)
+        {
+            for (Case c : childCases)
+                if ((c.Status.Equals(DAL_Case.STATUS_CLOSED) || c.Status.Equals(DAL_Case.STATUS_COMPLETED)) && c.Id != newCase.Id )
+                    completedCases++;
+            
+            for (Case parentCase : parentCases)
+                if (parentCase.Id == newCase.ParentId)
+                {
+                    parentCase.Sum_of_all_cases__c = totalCases;
+                    parentCase.Sum_of_Completed_Cases__c = completedCases;
+                    update parentCase;
+                    break;
+                }
+        }   
+    }
+    
+    // This method checks if the case inserted has a parent case and if so, it will update the parent case's sum of all cases
+     private void changeTheStatusBarBeforeInsert(Case newCase)
+     {
+        Integer totalCases = childCases.size();
+
+        if (!parentCaseIds.isEmpty())
+            for (Case parentCase : parentCases)
+                if (parentCase.Id == newCase.ParentId)
+                {
+                    totalCases++;
+                    parentCase.Sum_of_all_cases__c = totalCases;
+                    update parentCase;
+                    break;
+                }
+     }
+     
+     // This method checks for subcase that is being deleted and updates it's parent case's progress bar
+     private void updateChildCaseSum(Case oldCase)
+     {
+        Integer totalCases = childCases.size();
+        
+        if (!parentCaseIds.isEmpty())
+            for (Case parentCase : parentCases)
+                if (parentCase.Id == oldCase.ParentId)
+                {
+                    if ( oldCase.Status.Equals(DAL_Case.STATUS_CLOSED) || oldCase.Status.Equals(DAL_Case.STATUS_COMPLETED) )
+                        parentCase.Sum_of_Completed_Cases__c--;
+                        
+                    totalCases--;
+                    parentCase.Sum_of_all_cases__c = totalCases;
+                    update parentCase;
+                    break;
+                }
+            
+     }
+    //This method is used to create cases based upon the parent WO cases.
+    private void createNewWOCases(){
+        List<Case> newCaseListToBeUpdated = new List<Case>();
+        List<Case> newCaseListToBeInserted = new List<Case>();
+        
+        newCaseListToBeUpdated = recordCreator.newWoCaseFromParentCase(casesToBeInserted);   
+        for(Case caseRec:newCaseListToBeUpdated){
+            caseRec.FA_Authorisation_Number__c = '';
+            //caseRec.Will_the_Customer_be_paying_for_the_miss__c = DAL_Case.PICKLIST_YES;
+            newCaseListToBeInserted.add(caseRec);
+        }
+        DAL_BaseObject.InsertDBObjects(newCaseListToBeInserted, false);
+        
+    }
+    private void createNewCaseCosts(){
+        if(newCaseCostList.size() > 0){
+            DAL_BaseObject.InsertDBObjects(newCaseCostList,false);
+        }
+    }
+    private void createSecondNewCaseCosts(){
+        if(newCaseCostList.size() > 0){
+                DAL_BaseObject.InsertDBObjects(newCaseCostList,false);
+            }
+    } 
+    // This method will check if a case is closed/completed and if so, it will check the relevant check box on the related Opportunity TRUE 
+    private void caseCompletedCheckTheCheckBox(Case oldCase, Case newCase)
+    {
+        if (newCase != null && oldCase != null)
+        {           
+            if (newCase.Status != oldCase.Status && newCase.Status.Equals(DAL_Case.STATUS_COMPLETED) && !caseOpportunityIds.isEmpty())
+            {
+               
+                for (Opportunity opp : caseOpportunities)
+                {
+                    
+                    if (newCase.OpportunityId__c == opp.Id)
+                    {
+                        Boolean updateOpp = false;
+                        
+                        
+                        if(!opp.StageName.equals('Lost'))
+                        {
+                            if (newCase.Subject.Equals(opp.Name + SUBJ_CREATE_ACCOUNTS))
+                            {
+                                opp.Sage_And_Fleetactive_completed__c = true;
+                                updateOpp = true;
+                                
+                            }
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_SAGE_FLEET_ACTIV))
+                            {
+                                 opp.Sage_And_Fleetactive_completed__c = true;
+                                 updateOpp = true;
+                            }
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_SERVICE_ACTIVATION))
+                            {
+                                 opp.Enable_service_activation_case_closed__c = true;
+                                 updateOpp = true;
+                            }
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_SERVICE_DELIVERY ))
+                            {
+                                 opp.Service_Delivery__c = true;
+                                 updateOpp = true;
+                            }
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_ASSIGN_CCM))
+                            {
+                                opp.CCM_Assigned__c = true;
+                                updateOpp = true;
+                            }
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_ASSIGN_CCA))
+                            {                                
+                                opp.CCA_Assigned__c = true;
+                                updateOpp = true;
+                            }
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_CREATE_CONFIG_GROUP))
+                            {
+                                opp.Create_Config_case_completed__c = true;
+                                updateOpp = true;
+                            }
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_CREATE_IR_OBJ))
+                            {
+                                opp.IR_object_created__c = true;
+                                updateOpp = true;
+                            }  
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_APPROVE_IR)) 
+                            {
+                                opp.IR_approved__c = true;
+                                updateOpp = true;
+                            } 
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_PROJECT_OFFICE)) 
+                            {
+                                opp.Project_Office_Case_Complete__c = true;
+                                updateOpp = true;
+                            } 
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_PARENT_IMPLEMENTATION)) 
+                            {
+                                opp.Parent_Implementation_Case_completed__c = true;
+                                updateOpp = true;
+                            } 
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_CREATE_WORKS_ORDER)) 
+                            {
+                                opp.Works_Order_completed__c = true;
+                                updateOpp = true;
+                            } 
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_ADD_DATA_CENTER)) 
+                            {
+                                opp.Add_Data_Center_and_Service_Provider_com__c = true;
+                                updateOpp = true;
+                            }
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_CREATE_CONFIG_ON_FM)) 
+                            {
+                                opp.ConfigOnFMCreated__c = true;
+                                updateOpp = true;
+                            }
+                            else if (newCase.Subject.Equals(opp.Name + SUBJ_EXTRA_APPROVAL)) 
+                            {
+                                opp.Approved_By_Manjini__c = true;
+                                updateOpp = true;
+                            }
+                             else if (newCase.Subject.Equals(opp.Name + SUBJ_PICK_STOCK)) 
+                            {
+                                opp.Stock_Pick_Case_is_closed__c = true;
+                                updateOpp = true;
+                            }
+                            
+                            if (updateOpp)
+                            {
+                                update opp;
+                                break;
+                            }
+                        }   
+                    }
+                
+                }
+            }
+        }
+    }
+    
+    // This method will update the support process field on the implementation case, every time a one of it's subcases is closed/completed
+    private void updateTheSupportProcessField(Case oldCase, Case newCase)
+    {  
+        if (newCase != null && oldCase != null && !parentCaseIds.isEmpty())
+            if (newCase.Status != oldCase.Status && (newCase.Status.Equals(DAL_Case.STATUS_COMPLETED) || newCase.Status.Equals(DAL_Case.STATUS_CLOSED)))
+                for (Case parentCase : parentCases)
+                    if (parentCase.RecordTypeId == implementationCaseRecordType && parentCase.Id == newCase.ParentId)
+                    { 
+                        parentCase.Support_Process__c = newCase.Subject;
+                        update parentCase;
+                        break;
+                    }
+
+    }
+    
+    private void checkIfAccountCheckboxesTrueBeforeClosingCase(Case oldCase, Case newCase)
+    {
+        if ( newCase != null && oldCase != null && newCase.Status != oldCase.Status && !caseAccountIds.isEmpty() && !caseOpportunityIds.isEmpty())
+            if ( newCase.Status.Equals(DAL_Case.STATUS_COMPLETED) || newCase.Status.Equals(DAL_Case.STATUS_CLOSED))
+                for (Account acc : caseAccounts)
+                    if (String.isBlank(acc.Data_Center__c) || String.IsBlank(acc.Service_Provider__c))
+                         for (Opportunity opp : caseOpportunities)
+                            if (newCase.Subject.Equals(opp.Name + SUBJ_ADD_DATA_CENTER) )
+                            {
+                                newCase.AddError(ERROR_COMPLETE_DATA_CENTRE);
+                                return;
+                            }
+    }
+    
+    private void checkIfAllCasesAreCompletedBeforeClosingParentImplementationCase(Case oldCase, Case newCase)
+    {
+        if (newCase != null && oldCase != null && newCase.Status != oldCase.Status && !caseOpportunityIds.isEmpty()) 
+            if (newCase.Status.Equals(DAL_Case.STATUS_COMPLETED) || newCase.Status.Equals(DAL_Case.STATUS_CLOSED))   
+                for (Opportunity opp : caseOpportunities)        
+                    if (newCase.Subject.Equals(opp.Name + SUBJ_PARENT_IMPLEMENTATION))
+            
+                        if (
+                        !opp.Sage_And_Fleetactive_completed__c || 
+                        !opp.Enable_service_activation_case_closed__c || 
+                        !opp.CCM_Assigned__c || 
+                        !opp.CCA_Assigned__c || 
+                        !opp.Create_Config_case_completed__c || 
+                        !opp.IR_object_created__c || 
+                        !opp.IR_approved__c || 
+                        !opp.Project_Office_Case_Complete__c || 
+                        !opp.Works_Order_completed__c || 
+                        !opp.Add_Data_Center_and_Service_Provider_com__c
+                        )
+                        {
+                            newCase.AddError(ERROR_COMPLETE_SUB_CASES);
+                            return;
+                        }
+    }
+    
+    private void changeStageWhenChildCaseIsCreated(Case newCase)
+    {
+        
+        if (newCase != null && !parentCaseIds.isEmpty())
+            for (Case parentCase :parentCases)
+                if (parentCase.Status.Equals(DAL_Case.STATUS_NOT_STARTED))
+                    parentCase.Status = DAL_Case.STATUS_IN_PROGRESS;
+    }
+    
+    public override void bulkAfter()
+    {
+        super.bulkAfter();
+        
+        if(trigger.isUpdate)
+        {    
+            Set<Id> newCaseIds = Trigger.isUpdate ? Trigger.newMap.keySet() : null;            
+            allCaseRecordTypes.putAll(DAL_Case.getCaseRecordTypes(newCaseIds));
+            
+                  
+            for(Case newCase: newCases)
+            {
+                
+                Case oldCase = (Case)trigger.oldMap.get(newCase.Id);
+                
+                if( (oldCase.Will_the_Customer_be_paying_for_the_miss__c != newCase.Will_the_Customer_be_paying_for_the_miss__c) && (newCase.Will_the_Customer_be_paying_for_the_miss__c != null )){
+                    casesToBeInserted.add(newCase);
+                }
+                
+                if (DAL_Share.mustShareWithPartner(oldCase, newCase))
+                    casesToShareWithPartner.add(newCase);
+                
+                if (newCase.get(DAL_BaseObject.PROCESSING_INSTRUCTIONS) != null && oldCase.IsClosed != newCase.IsClosed && newCase.IsClosed)
+                    closedJSONCases.add(newCase);
+                
+                String newCaseRecordType = allCaseRecordTypes.get(newCase.Id).RecordType.DeveloperName; 
+                
+                if((newCaseRecordType.equals(DAL_Case.RT_AF_FL_WORKS_ORDER) || newCaseRecordType.equals(DAL_Case.RT_JOB_CARD_CASE)) && (newCase.status == DAL_case.STATUS_COMPLETED || newCase.status == DAL_case.STATUS_CLOSED) && (newCase.OpportunityId__r.Category__c == DAL_Opportunity.CATEGORY_DEINSTALLATION || newCase.OpportunityId__r.Category__c == DAL_Opportunity.CATEGORY_REINSTALLATION || newCase.OpportunityId__r.Category__c == DAL_Opportunity.CATEGORY_MAINTAINANCE) )
+                    allClosedCaseOpportunities.add(newCase.OpportunityId__c);
+                
+                              
+            }
+            if(casesToBeInserted.size() > 0)
+                createNewWOCases();   
+            
+            if(allClosedCaseOpportunities.size() > 0 ){
+                
+                allIncompleteOppTasks = DAL_Task.getIncompleteTasks(allClosedCaseOpportunities);
+            }                                      
+            
+            if(allIncompleteOppTasks.size() > 0){
+                
+                DAL_Task.setStatusCompleted(allIncompleteOppTasks);
+            
+            }
+            
+        }
+        if(trigger.isInsert){                
+            for(Case newCase: newCases)
+                { 
+                    if( newCase.Will_the_Customer_be_paying_for_the_miss__c == DAL_Case.PICKLIST_YES ){
+                        newCaseCostList.add(RecordCreator.newCase_Costs(newCase.id));
+                    }
+                    else
+                    if(newCase.Will_the_Customer_be_paying_for_the_miss__c == DAL_Case.PICKLIST_NO)
+                        newCaseCostList.add(RecordCreator.newSecondCase_Costs(newCase.id));
+                }  
+            if(newCaseCostList.size()>0)
+            createNewCaseCosts();
+              
+        }
+        
+        
+    }
+    
+    
+}
