@@ -1,0 +1,695 @@
+global class DAL_Case extends DAL_BaseObject
+{
+    public static final String ACCOUNT_ID_FIELD = Case.AccountId.getDescribe().getLocalName();
+    
+    public static final String FITMENT_CENTRE_ID_FIELD = Case.Fitment_Center__c.getDescribe().getLocalName();
+    public static final String RT_IMPLEMENTATION = 'AF_FL_Implementation_Case';
+    public static final String RT_WORKS_ORDER = 'Works_Order_Consumer';
+    public static final String RT_AF_FL_WORKS_ORDER = 'AF_FL_Works_Order';
+    public static final String RT_REPAIR_CASE = 'Repair_Case';
+    public static final String RT_JOB_CARD_CASE = 'Job_Card';
+    
+    public static final String RT_SERVICE_ACTIVATION = 'AF_FL_Enable_Service_Activation';
+    public static final String RT_CONFIG_GROUP = 'Create_Config_Groups';
+    public static final String RT_INVENTORY_REQUEST  ='AF_FL_Inventory_Request';
+    public static final String RT_APPROVE_IR  ='AF_FL_Inventory_Request_Approval';
+    public static final String RT_PROJECT_OFFICE  ='AF_FL_Project_Office';
+    public static final String RT_CCM  ='Assign_CCM';
+    public static final String RT_CCA  ='Assign_CCA';
+
+    public static final String STATUS_CLOSED = 'Closed';
+    public static final String STATUS_COMPLETED = 'Completed';
+    public static final String STATUS_CANCELLED = 'Cancelled';
+    public static final String STATUS_RETAINED = 'Retained';
+    public static final String STATUS_IN_PROGRESS = 'In Progress';
+    public static final String STATUS_NOT_STARTED = 'Not Started';
+    
+    public static final String PICKLIST_YES = 'Yes';
+    public static final String PICKLIST_No = 'No';
+    
+    public static final String CASE_TYPE_INSTALLATION = 'Installation';
+    public static final String FITMENT_SLOT_MORNING = 'Morning';
+    
+    
+    public static final String SOQL_OFFSET_FMT = ' OFFSET {0}';
+    
+    private static final String CASE_BULK_SUBJECT_WITH_REG = '{0} - {1}';
+    private static final String FIELD_SHARE_WITH_PARTNER = Case.Share_with_Partner__c.getDescribe().getLocalName();
+    private static final String FIELD_STATUS = Case.Status.getDescribe().getLocalName();
+    private static final String OBJECT_NAME = Case.SObjectType.getDescribe().getLocalName();
+    
+    public static final Set<String> CLOSED_CASE_STATUSES = new Set<String>{STATUS_CLOSED, STATUS_CANCELLED, STATUS_RETAINED};
+    private static final Set<String> PARTNER_CASES = new Set<String>{RT_WORKS_ORDER, RT_REPAIR_CASE};
+    
+    public class BulkParameters
+    {
+        //The number of cases to create
+        public Integer quantity;
+        
+        //References
+        public Id accountId;
+        public Id opportunityId;
+        public Id bundleId;
+        public Id agreementId; 
+        public Id fitmentPartnerId;
+        public Id contactPersonId;
+    
+        //Trackable Asset List for which to create cases
+        public Set<Id> vehicleIds = new Set<Id>();
+        
+        //Case details
+        public String deviceStatus;
+        public Date fitmentDate;
+        public String fitmentSlot;
+        public String recordTypeName;
+        public String installationCity;
+        public String installationStreet;
+        public String installationProvince;
+        public String installationPostalCode;
+        public String installationCountry;
+        public Boolean mobileFitment;
+        public String caseType;
+        public String worksOrderType;
+    }
+    
+    public class WorksOrder
+    {
+        public Case worksOrder;
+        public User owner;
+    }
+    
+    global class PagedWorksOrders 
+    {
+        public Integer totalItems = 0;
+        public Datetime lastModifiedDate = Datetime.now();
+        public List<WorksOrder> worksOrders = new List<WorksOrder>();
+    }
+    
+    public static List<Case_Product__c> getCaseProducts(Set<Id> caseProductIds)
+    {
+        return[
+            SELECT 
+                Id, 
+                Device__r.Bundled_Product__c, 
+                Device__r.Active__c,
+                Trackable_Asset_FK__c, 
+                Product_Bundle__c, 
+                Trackable_Asset__c, 
+                Device__r.Bundled_Product__r.Product__r.Product_Type__c, 
+                match__c
+            FROM Case_Product__c
+            WHERE Id IN : caseProductIds
+        ];
+    }
+    
+    public static List<Case> getCase(Set<Id> caseIds)
+    {
+        return
+                [
+                    SELECT 
+                        Id, 
+                        ParentId, 
+                        Subject, 
+                        Account.FM_Web_Org_ID__c, 
+                        AccountId, 
+                        Account.FleetActiv_Account__c 
+                    FROM Case  
+                    WHERE Id IN :caseIds
+                ];
+    }
+
+    public static List<Case> getDetailedWorksOrders(Set<Id> caseIds)
+    {
+        return
+                [
+                    SELECT 
+                            //Case Information
+                            CaseNumber,
+                            Client_Representative__c,
+                            Client_Representative_Phone__c,
+                            Fitment_Date__c,
+                            LastModifiedDate,
+                            Mobile_Fitment__c,
+                            OwnerId,
+                            Physical_City__c,
+                            Physical_Country__c,
+                            Physical_Postal_Zip_Code__c,
+                            Physical_State_Province__c,
+                            Physical_Street__c,
+                            Priority,
+                            Status,
+                            Subject,
+                            Type,
+                            Works_Order_Type__c,
+                                            
+                            //Case Account Information
+                            Account.Name,
+                            Account.Physical_address_State_Province__c,
+                            Account.Physical_address_Street__c,
+                            Account.Physical_City__c,
+                            Account.Physical_Country__c,
+                            Account.Physical_Postal_Zip_Code__c,
+                                                                                
+                            //Fitment Center Account Information
+                            Fitment_Center__r.Certified_Beam_E_Technician__c,
+                            Fitment_Center__r.Certified_MX1_Technician__c,
+                            Fitment_Center__r.Certified_MX2_Technician__c,
+                            Fitment_Center__r.Certified_MX3_Technician__c,
+                            Fitment_Center__r.Name,
+
+                            //Trackable Asset Information
+                            Trackable_Asset__r.Description__c,
+                            Trackable_Asset__r.Engine_Number__c,
+                            Trackable_Asset__r.Make__c,
+                            Trackable_Asset__r.Model__c,
+                            Trackable_Asset__r.Name,
+                            Trackable_Asset__r.Vehicle_Chassis_Number__c,
+                            Trackable_Asset__r.Vehicle_Colour__c,
+                            Trackable_Asset__r.Vehicle_Type__c,
+                            Trackable_Asset__r.Year__c,
+                                                    
+                            //Contact Information
+                            Contact.MobilePhone,
+                            Contact.Name, 
+                            Contact.Phone, 
+                            Contact.Physical_City__c,
+                            Contact.Physical_Country__c,
+                            Contact.Physical_Postal_Zip_Code__c,
+                            Contact.Physical_State_Province__c,
+                            Contact.Physical_Street__c,
+                            
+                            (
+                                SELECT 
+                                        //Device Details
+                                        Device__r.Device_Status__c,
+                                        Device__r.GPS_Location__c,
+                                        Device__r.GPS_Serial__c,
+                                        Device__r.Module__c, 
+                                        Device__r.Name, 
+                                        Device__r.OBR_Reference_1__c, 
+                                        Device__r.OBR_Reference_2__c, 
+                                        Device__r.OBR_Reference_3__c, 
+                                        Device__r.OBR_Reference_4__c, 
+                                        Device__r.OBR_Reference_5__c, 
+                                        Device__r.OBR_Reference_6__c, 
+                                        Device__r.OBR_Reference_7__c, 
+                                        Device__r.OBR_Reference_8__c, 
+                                        Device__r.Odometer_reading__c, 
+                                        Device__r.Product_Serial__c, 
+                                        Device__r.Sections__c, 
+                                        Device__r.Warranty_Status__c,
+                                                            
+                                        //Trackable Asset Info for device
+                                        Device__r.Trackable_Asset__r.Name,
+                                        Device__r.Trackable_Asset__r.Description__c,
+                                        Device__r.Trackable_Asset__r.Engine_Number__c   ,
+                                        Device__r.Trackable_Asset__r.Make__c,
+                                        Device__r.Trackable_Asset__r.Model__c,
+                                        Device__r.Trackable_Asset__r.Vehicle_Chassis_Number__c,
+                                        Device__r.Trackable_Asset__r.Vehicle_Colour__c,
+                                        Device__r.Trackable_Asset__r.Vehicle_Type__c,
+                                        Device__r.Trackable_Asset__r.Year__c,
+
+                                        //Product details
+                                        Product__r.Product_Type__c, 
+                                        Product__r.Name,
+                                        Product__r.Family, 
+                                                            
+                                        //Product Bundle details
+                                        Product_Bundle__r.Name, 
+                                        Product_Bundle__r.Main_Product__c, 
+                                        Product_Bundle__r.AF_Price_Plan__c, 
+                                        Product_Bundle__r.AF_Price_Plan_Sub_Category__c, 
+                                        Product_Bundle__r.AF_Description__c
+                                                                
+                                FROM 
+                                    
+                                        Case_Products__r                    
+                
+                                                    
+                            )
+                    
+                    FROM Case
+                    WHERE Id IN :caseIds
+                    ORDER BY LastModifiedDate               
+                ];  
+    }
+    
+    public static PagedWorksOrders getAllOpenPartnerWorksOrders(Id accountId, Id fitmentPartnerId, Integer pageSize)
+    {
+        return getAllOpenPartnerWorksOrders(null, false, accountId, fitmentPartnerId, 1, pageSize);
+    }
+    
+    public static PagedWorksOrders getAllOpenPartnerWorksOrders(Datetime lastModifiedDate, Boolean allocatedToPartnerUser, Integer pageNr, Integer pageSize)
+    {
+        return getAllOpenPartnerWorksOrders(lastModifiedDate, allocatedToPartnerUser, null, null, pageNr, pageSize);    
+    }
+    
+    public static PagedWorksOrders getAllOpenPartnerWorksOrders(Datetime lastModifiedDate, Boolean allocatedToPartnerUser, Id accountId, Id fitmentPartnerId, Integer pageNr, Integer pageSize)
+    {
+        PagedWorksOrders pagedWorksOrders = new PagedWorksOrders(); 
+   
+        al.AndCondition whereClauseCondition = new al.AndCondition();
+        
+        if (lastModifiedDate != null)
+            whereClauseCondition.add(new al.FieldCondition(DAL_BaseObject.FIELD_LAST_MODIFIED_DATE, al.Operator.GREATER_THAN, lastModifiedDate));
+                
+        whereClauseCondition.add(new al.SetCondition(DAL_BaseObject.RECORDTYPE_NAME_FIELD).inx(new List<String>(PARTNER_CASES)));
+        whereClauseCondition.add(new al.FieldCondition(FIELD_SHARE_WITH_PARTNER, al.Operator.EQUALS, true));
+        whereClauseCondition.add(new al.FieldCondition(FIELD_STATUS, al.Operator.NOT_EQUALS, STATUS_CLOSED));
+        
+        if (allocatedToPartnerUser)
+            whereClauseCondition.add(new al.SetCondition(DAL_BaseObject.OWNER_ID_FIELD).inx(new List<String>(Dal_Users.getAllAfricaPartnerUserIds())));
+        else
+            whereClauseCondition.add(new al.SetCondition(DAL_BaseObject.OWNER_ID_FIELD).notIn(new List<String>(Dal_Users.getAllAfricaPartnerUserIds())));
+            
+        if (accountId != null)
+            whereClauseCondition.add(new al.FieldCondition(ACCOUNT_ID_FIELD, al.Operator.EQUALS, accountId));
+            
+        if (fitmentPartnerId != null)
+            whereClauseCondition.add(new al.FieldCondition(FITMENT_CENTRE_ID_FIELD, al.Operator.EQUALS, fitmentPartnerId));
+        
+        List<al.OrderBy> orderByClause =  new List<al.Orderby>();
+        orderByClause.add(new al.OrderBy(DAL_BaseObject.FIELD_LAST_MODIFIED_DATE));
+    
+        al.SoqlBuilder builder = new al.SoqlBuilder()
+                                    .selectx(DAL_BaseObject.ID_FIELD)
+                                    .fromx(OBJECT_NAME)
+                                    .wherex(whereClauseCondition)
+                                    .orderbyx(orderByClause);   
+                
+        String query;
+        if (pageNr > 0 && pageSize > 0) 
+        {
+            
+            al.SoqlBuilder soqlCount = new al.SoqlBuilder()
+                                            .selectCount()
+                                            .fromx(OBJECT_NAME)
+                                            .wherex(whereClauseCondition);
+                                            
+            query = soqlCount.toSOQL();
+            
+            ////System.debug('Count Query: ' + query);
+                                            
+            pagedWorksOrders.totalItems = Database.countQuery(soqlCount.toSOQL());
+            
+            if (pagedWorksOrders.totalItems <= 0)
+                return pagedWorksOrders;
+            
+            builder.limitx(pageSize);
+            
+            query =  builder.toSOQL() + String.format(SOQL_OFFSET_FMT,new String[]{String.valueOf((pageNr - 1) * pageSize)});
+        }
+        else
+            query =  builder.toSOQL();
+
+        ////System.debug('WorksOrder Query: ' + query);
+        
+        List<Case> cases = Database.query(query);
+
+        Set<Id> caseIds = new Set<Id>(DAL_BaseObject.extractListIds(cases));
+
+        cases = getDetailedWorksOrders(caseIds);
+         
+         if (pagedWorksOrders.totalItems == 0)
+         {
+            pagedWorksOrders.totalItems = cases.size();
+            
+            if (pagedWorksOrders.totalItems <= 0)
+                return pagedWorksOrders;
+                
+         }
+
+         Map<Id, User> userMap = new Map<Id, User>(DAL_Users.getUserDetailsByIds(SysUtils.extractListIds(cases, DAL_BaseObject.OWNER_ID_FIELD)));
+         
+         for(Case cse: cases)
+         {
+            WorksOrder worksOrder = new WorksOrder();
+            worksOrder.worksOrder = cse;
+            worksOrder.owner = userMap.get(cse.OwnerId);
+            pagedWorksOrders.worksOrders.add(worksOrder);
+         }      
+                                
+         return pagedWorksOrders;
+    
+    }
+    
+    public static List<Case> getFitmentCasesToShare(Set<Id> accountIds)
+    {
+        return [
+                    SELECT Id,  
+                            AccountId,
+                            OpportunityId__c,
+                            Fitment_Center__c,
+                            Share_with_Partner__c
+                    FROM Case
+                    WHERE Fitment_Center__c IN :accountIds
+                    AND Share_with_Partner__c = true
+                ];
+    
+    }
+     
+    public static List<Case> getIncompleteCases(Id opportunityId)
+    {
+        List<Case> cases = [SELECT Id, Status, Subject FROM Case WHERE OpportunityId__c = :opportunityId AND Status != :STATUS_COMPLETED];
+        return cases;
+    }
+    
+    
+       public static List<CaseComment> getCaseCommentsWithMEAFleetTrackableAssets(Id fleetTrackableAssetId,Integer limitSize)
+    {
+         return
+            [
+                SELECT  
+                    CommentBody,
+                    CreatedBy.Name,
+                    CreatedDate,
+                    ParentId 
+                FROM CaseComment
+                WHERE ParentId IN 
+                                (
+                                    SELECT  
+                                            Id
+                                    FROM Case 
+                                    WHERE Fleet_Trackable_Asset__c = : fleetTrackableAssetId 
+                                )
+                LIMIT :limitSize
+            ];
+    }
+    
+     public static List<CaseComment> getCaseCommentsWithMEAFleetTa(Id fleetTrackableAssetId)
+    {
+         return
+            [
+                SELECT  
+                    CommentBody,
+                    CreatedBy.Name,
+                    CreatedDate,
+                    ParentId 
+                FROM CaseComment
+                WHERE ParentId IN 
+                                (
+                                    SELECT  
+                                            Id
+                                    FROM Case 
+                                    WHERE Fleet_Trackable_Asset__c = : fleetTrackableAssetId 
+                                )
+
+            ];
+    }
+        
+        public static List<Case> getIncompleteCasesList(Set<Id> opportunityId)
+    {
+        List<Case> cases = [SELECT Id, Status, Subject FROM Case WHERE OpportunityId__c IN :opportunityId AND Status != :STATUS_COMPLETED];
+        return cases;
+    }
+    
+    public static List<Case> getParentCase(Set<Id> caseParentId)
+    {
+        List<Case> parent_case_list = [SELECT Id,AccountId, OpportunityId__c , Sum_of_Completed_Cases__c,Status , RecordTypeId From Case Where Id IN : caseParentId];
+        return parent_case_list;
+    }
+    
+     public static List<Case> getChildrenCases(Set<Id> caseChildrentId)
+    {
+        List<Case> children_Case_List = [SELECT Id,AccountId, Status, Sum_of_Completed_Cases__c FROM Case WHERE ParentId  IN :caseChildrentId];
+        return children_Case_List;
+    }
+      
+     public static Set<Id> getAccountIdsFromCases(Set<Id> caseIds)
+     {
+        return SysUtils.extractListIds
+                                    (
+                                        [
+                                            SELECT AccountId 
+                                            FROM Case 
+                                            WHERE Id IN :caseIds
+                                        ], 
+                                        ACCOUNT_ID_FIELD
+                                    );
+     }
+     
+     
+//this method recceives a obj and then sets the relevant case status to completed
+    public static void setStatusCompleted(List<Case> caseInc)
+    {
+        //only do this if list is not empty do the validation in finally
+        for(Case cse : caseInc)
+        {
+            cse.Status =   STATUS_COMPLETED ;
+            cse.Processing_Instructions__c = null;  
+        }
+        
+        DAL_BaseObject.UpdateDBObjects(caseInc, true);
+    
+    }
+    
+ 
+
+    public static void bulkCreateConsumerCase (BulkParameters parameters)
+    {
+        System.debug('Parameters: ' + parameters);
+        
+        if(parameters == null || !(parameters.quantity > 0))
+            return;
+            
+        String recordType;
+            
+        if (String.isNotBlank(parameters.recordTypeName))
+            recordType = RecordCreator.GetRecordTypeByDeveloperName(parameters.recordTypeName);
+            
+        List<A_Trackable_Asset__c> vehicles = DAL_TrackableAssets.getTrackableAssets(parameters.vehicleIds);
+        
+        List<Case> cases = new List<Case>();
+
+        for (Integer i = 0; i < parameters.quantity; i++)
+        {
+            Case newCase = new Case();
+            
+            newCase.AccountId = parameters.accountId;
+            newCase.Agreement__c = parameters.agreementId;
+            newCase.OpportunityId__c = parameters.opportunityId;
+            newCase.Fitment_Center__c = parameters.fitmentPartnerId;
+            newCase.Fitment_Date__c = parameters.fitmentDate;
+            newCase.Fitment_Slot__c = parameters.fitmentSlot;
+            newCase.ContactId = parameters.contactPersonId;
+            newCase.RecordTypeId = recordType;
+            newCase.Physical_City__c = parameters.installationCity;
+            newCase.Physical_Country__c = parameters.installationCountry;
+            newCase.Physical_Postal_Zip_Code__c = parameters.installationPostalCode;
+            newCase.Physical_State_Province__c = parameters.installationProvince;
+            newCase.Physical_Street__c = parameters.installationStreet;
+            newCase.Mobile_Fitment__c = parameters.mobileFitment;
+            newCase.Subject = parameters.caseType;
+            newCase.Type = parameters.caseType;
+            newCase.Works_Order_Type__c = parameters.worksOrderType;
+
+            if (!vehicles.isEmpty())
+            {
+                A_Trackable_Asset__c vehicle = vehicles.remove(0);
+                newCase.Trackable_Asset__c = vehicle.Id;
+                newCase.Subject = String.format(CASE_BULK_SUBJECT_WITH_REG, new String[] {newCase.Type, vehicle.Name});
+            }
+            
+            cases.add(newCase);
+        }
+        
+        System.debug('Cases: ' + cases);
+        
+        DAL_BaseObject.InsertDBObjects(cases, true);
+        
+        Set<Id> bundleIds = new Set<Id>();
+        bundleIds.add(parameters.bundleId);   
+            
+        List<ALL_C_Product_Bundle__c> bundles = DAL_Product.getBundlesWithProducts(bundleIds);
+        System.debug('Product Bundles: ' + bundles);
+        
+        Map<String, Id> recordTypeMap = RecordCreator.GetRecordTypesByDeveloperName(DAL_Device.DEVICE_RECORD_TYPES);
+        
+        Map<Case_Product__c, Device__c> caseProductMap = new Map<Case_Product__c, Device__c>();
+        List<Device__c> devices = new List<Device__c>();
+        List<Case_Product__c> caseProducts = new List<Case_Product__c>();
+        
+        Map<ALL_C_Product_Bundle__c, List<Device__c>> mapBundleDevices = new Map<ALL_C_Product_Bundle__c, List<Device__c>>();
+        Map<Id, ALL_C_Bundled_Product__c> mapBundledProducts = new Map<Id, ALL_C_Bundled_Product__c>();
+        
+        for(Case newCase: cases)
+            for (ALL_C_Product_Bundle__c bundle: bundles)
+                for (ALL_C_Bundled_Product__c bundledProduct: bundle.Bundled_Products__r)
+                {
+                    String family = bundledProduct.Product__r.Family;
+                    Device__c device;
+                    
+                    System.debug('Family:' + family);
+                
+                    if (family.equals(DAL_Product.HARDWARE_FAMILY))
+                    {
+                        device = new Device__c();
+                        
+                        device.Bundled_Product__c = bundledProduct.Id;
+                        device.Product_Type__c = bundledProduct.Product__r.Product_Type__c;
+                        device.Trackable_Asset__c = newCase.Trackable_Asset__c;
+                        device.Device_Status__c = parameters.deviceStatus;
+                        
+                        if (device.Product_Type__c == DAL_Product.PRODUCT_TYPE_BEAME)
+                            device.RecordtypeId = recordTypeMap.get(DAL_Device.RT_NON_GSM);
+                        else
+                            device.RecordtypeId = recordTypeMap.get(DAL_Device.RT_GSM);
+                            
+                        devices.add(device);
+                        
+                        mapBundledProducts.put(bundledProduct.Id, bundledProduct);
+                    }
+                    
+                    if (family.equals(DAL_Product.ACCESSORY_FAMILY) || family.equals(DAL_Product.HARDWARE_FAMILY))
+                    {
+                        Case_Product__c caseProduct = new Case_Product__c();
+                        
+                        caseProduct.Case__c = newCase.Id;
+                        caseProduct.Product__c = bundledProduct.Product__r.Id;
+                        caseProducts.add(caseProduct);
+                        
+                        if (device != null)
+                        {
+                            caseProductMap.put(caseProduct, device);
+                            
+                            List<Device__c> deviceList = mapBundleDevices.get(bundle);
+                                
+                            if (deviceList == null)
+                            {
+                                deviceList = new List<Device__c>();
+                                mapBundleDevices.put(bundle, deviceList);
+                            }
+                            
+                            deviceList.add(device);
+                        }
+                    }
+                    else if (family.equals(DAL_Product.SUBSCRIPTION_FAMILY))
+                        mapBundledProducts.put(bundledProduct.Id, bundledProduct);
+                }
+     
+        System.debug('Devices: ' + devices);
+        
+        DAL_BaseObject.InsertDBObjects(devices, true);
+        
+        System.Debug('Case Products before map: ' + caseProducts);
+        
+        for (Case_Product__c caseProduct: caseProducts)
+        {
+            Device__c device = caseProductMap.get(caseProduct);
+            if (device != null)
+                caseProduct.Device__c = device.Id;  
+        }
+        
+        System.Debug('Case Products after map: ' + caseProducts);
+        DAL_BaseObject.InsertDBObjects(caseProducts, true);
+
+        //Now we need to loop through each created device and add it's costs
+        //this costs should be a single hardware cost and potentially multiple subscription costs
+        List<OpportunityLineItem> lineItems = DAL_Opportunity.getOpportunityLineItemsForBundledProducts(parameters.opportunityId);
+        
+        System.debug('Line Items: ' + lineItems);
+        
+        Opportunity opportunity = DAL_Opportunity.getOpportunityWithSourcePartnerInfo(parameters.opportunityId);
+        
+        List<Device_Cost__c> deviceCosts = new List<Device_Cost__c>();
+        for (Device__c device: devices)
+        {
+            ALL_C_Bundled_Product__c bundledProduct = mapBundledProducts.get(device.Bundled_Product__c);
+            
+            System.debug('Bundled Product:' + bundledProduct);
+            
+            if (bundledProduct != null)
+                for (OpportunityLineItem lineItem: lineItems)
+                {
+                    System.debug('lineItem:' + lineItem);   
+    
+                if (
+                    bundledProduct.Product_Bundle__c == lineItem.Bundled_Product__r.Product_Bundle__c &&
+                    device.Product_Type__c == lineItem.PricebookEntry.Product2.Product_Type__c
+                    )   
+                    {
+                        Device_Cost__c deviceCost = new Device_Cost__c();
+                        deviceCost.Charge_Code__c = lineItem.Charge_Code__c;
+                        deviceCost.Device__c = device.Id;
+                        deviceCost.Product__c =  lineItem.PricebookEntry.Product2Id;
+                        deviceCost.AF_Price_Plan__c = bundledProduct.Product_Bundle__r.AF_Price_Plan__c;
+                        deviceCost.Price_Plan_Sub_Category__c = bundledProduct.Product_Bundle__r.AF_Price_Plan_Sub_Category__c;
+                        deviceCost.Sales_Price__c = lineItem.UnitPrice;
+                        deviceCost.Third_Party_Billing__c = opportunity.Source_Partner__r.ThirdPartyBilling__c;
+                        deviceCost.Master_Account_Number__c = opportunity.Source_Partner__r.ThirdPartyBillingMasterAccountNumber_Te__c;
+                        deviceCosts.add(deviceCost);    
+                    }
+                }
+        }
+        
+        System.Debug('Device Costs: ' + deviceCosts);
+        DAL_BaseObject.InsertDBObjects(deviceCosts, true);
+        
+        if (!cases.isEmpty() && parameters.fitmentPartnerId != null)
+        {
+            for(Case newCase: cases)
+                newCase.Share_with_Partner__c = true;
+                
+            DAL_BaseObject.UpdateDBObjects(cases, true);
+        }
+    }
+    
+    public static Map<Id, Case> getCaseRecordTypes(Set<Id> caseIds)
+    {
+        List<Case> cases = [SELECT Id, RecordType.DeveloperName 
+                                            FROM Case 
+                                            WHERE Id IN :caseIds];
+        return new Map<Id, Case>(cases);     
+    }
+    
+    public static PagedWorksOrders allocateWorksOrders(Id accountId, Id userId, Integer nrOfWorksOrders)
+    {
+        NrOfWorksOrders = Math.max(1, NrOfWorksOrders);
+        
+        //Determine the Partner Account Id, for the User Id passed in
+        Id fitmentPartnerId = DAL_Users.getUserAccountId(userId);
+        
+        if (fitmentPartnerId == null)
+            return new PagedWorksOrders();  
+            
+        //get all the worksorders for the specific account and fitment partner that haven't been already
+        //allocated to a user.          
+        PagedWorksOrders pagedOrders = getAllOpenPartnerWorksOrders(accountId, fitmentPartnerId, nrOfWorksOrders);
+        
+        //System.debug('pagedOrders: ' + pagedOrders);
+        
+        //now ensure that we assign the user to the returned cases
+        if (!pagedOrders.worksOrders.isEmpty())
+        {
+            List<Case> cases = new List<Case>();        
+            
+            for(WorksOrder worksOrder: pagedOrders.worksOrders)
+            {
+                Case cse = new Case();
+                    
+                cse.Id = worksOrder.worksOrder.Id;
+                cse.OwnerId = userId;
+                cse.Accept_Case__c = true;
+                
+                cases.add(cse);
+            }
+            
+            
+            ////System.debug('cases:' + cases);
+            DAL_BaseObject.UpdateDBObjects(cases, true);
+        }
+
+        return pagedOrders;
+    }
+    
+    public static List<Case> saveWorksOrders(List<Case> worksOrders)
+    {
+        if (worksOrders == null || worksOrders.isEmpty())
+            return worksOrders;
+        
+        DAL_BaseObject.UpdateDBObjects(worksOrders, true);
+        
+        return worksOrders;
+    }
+}
